@@ -49,6 +49,9 @@ jobs:
       - name: govulncheck (reachability gate)
         working-directory: .src
         run: |
+          # Apply the same security dep overrides the image build uses, so the
+          # gate verifies the exact module tree we ship.
+          if [ -n "$GO_PATCHES" ]; then go get $GO_PATCHES && go mod tidy; fi
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" "$PKG/..."
 
@@ -74,6 +77,7 @@ jobs:
             PKG=${{ env.PKG }}
             BIN=${{ env.BIN }}
             GO_VERSION=${{ env.GO_VERSION }}
+            GO_PATCHES=${{ env.GO_PATCHES }}
 
       # ── SBOM + supply-chain provenance for the published artifact ──
       - name: Generate SBOM (CycloneDX)
