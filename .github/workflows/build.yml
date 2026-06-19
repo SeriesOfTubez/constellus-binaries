@@ -14,30 +14,18 @@ on:
 
 permissions:
   contents: read
+  packages: write       # push image to GHCR
+  id-token: write        # OIDC for provenance attestation
+  attestations: write    # write the SLSA provenance attestation
 
 jobs:
-  discover:
-    runs-on: ubuntu-latest
-    outputs:
-      binaries: ${{ steps.list.outputs.binaries }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: list
-        name: Discover binaries/*
-        run: echo "binaries=$(ls -d binaries/*/ | xargs -n1 basename | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
-
   build:
-    needs: discover
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write      # push image to GHCR
-      id-token: write       # OIDC for provenance attestation
-      attestations: write   # write the SLSA provenance attestation
     strategy:
       fail-fast: false
       matrix:
-        binary: ${{ fromJson(needs.discover.outputs.binaries) }}
+        # Add a binary: create binaries/<name>/ (build.env + Dockerfile) and list it here.
+        binary: [zgrab2]
     steps:
       - uses: actions/checkout@v4
 
@@ -53,8 +41,8 @@ jobs:
 
       # ── Security gate: reachability-aware vuln scan of the pinned source ──
       # govulncheck flags a vuln only if the built command actually reaches the
-      # vulnerable symbol — so it's the authoritative, low-noise gate for a
-      # third-party tool we don't maintain. A reachable finding fails the build.
+      # vulnerable symbol — the authoritative, low-noise gate for a third-party
+      # tool we don't maintain. A reachable finding fails the build.
       - name: Fetch pinned source
         run: git clone --depth 1 --branch "$VERSION" "$REPO" .src
 
@@ -79,7 +67,7 @@ jobs:
           context: "binaries/${{ matrix.binary }}"
           push: true
           tags: "ghcr.io/${{ env.OWNER_LC }}/${{ matrix.binary }}:${{ env.VERSION }}"
-          provenance: false   # provenance attested explicitly below (SLSA)
+          provenance: false   # SLSA provenance attested explicitly below
           build-args: |
             REPO=${{ env.REPO }}
             VERSION=${{ env.VERSION }}
@@ -88,8 +76,6 @@ jobs:
             GO_VERSION=${{ env.GO_VERSION }}
 
       # ── SBOM + supply-chain provenance for the published artifact ──
-      # Trivy also extracts the Go module graph embedded in the binary; the SBOM
-      # is the dependency record. govulncheck (above) is the vuln *gate*.
       - name: Generate SBOM (CycloneDX)
         uses: aquasecurity/trivy-action@0.36.0
         with:
