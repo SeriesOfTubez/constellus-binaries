@@ -77,7 +77,7 @@ jobs:
 
       # ── SBOM + supply-chain provenance for the published artifact ──
       - name: Generate SBOM (CycloneDX)
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: "ghcr.io/${{ env.OWNER_LC }}/${{ matrix.binary }}@${{ steps.build.outputs.digest }}"
