@@ -44,7 +44,13 @@ jobs:
       # vulnerable symbol — the authoritative, low-noise gate for a third-party
       # tool we don't maintain. A reachable finding fails the build.
       - name: Fetch pinned source
-        run: git clone --depth 1 --branch "$VERSION" "$REPO" .src
+        # REF may be a tag, branch, or commit SHA — `git clone --branch` only
+        # accepts tags/branches, so init+fetch+checkout the specific ref.
+        run: |
+          git init -q .src
+          git -C .src remote add origin "$REPO"
+          git -C .src fetch --depth 1 -q origin "${REF:-$VERSION}"
+          git -C .src checkout -q FETCH_HEAD
 
       - name: govulncheck (reachability gate)
         working-directory: .src
@@ -74,6 +80,7 @@ jobs:
           build-args: |
             REPO=${{ env.REPO }}
             VERSION=${{ env.VERSION }}
+            REF=${{ env.REF }}
             PKG=${{ env.PKG }}
             BIN=${{ env.BIN }}
             GO_VERSION=${{ env.GO_VERSION }}
