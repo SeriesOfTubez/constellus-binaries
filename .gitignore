@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+
+# Local output of datasets/cloud-ranges/normalize.py; the real artifact is a release.
+out/

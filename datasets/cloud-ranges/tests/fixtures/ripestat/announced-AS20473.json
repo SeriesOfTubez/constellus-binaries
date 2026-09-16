@@ -1,0 +1,13 @@
+{
+  "status": "ok",
+  "data": {
+    "resource": "AS20473",
+    "prefixes": [
+      {"prefix": "45.32.32.0/24", "timelines": [{"starttime": "2020-01-01T00:00:00", "endtime": "2026-01-01T00:00:00"}]},
+      {"prefix": "2001:19f0::/32", "timelines": [{"starttime": "2020-01-01T00:00:00", "endtime": "2026-01-01T00:00:00"}]},
+      {"prefix": "45.32.0.0/16", "timelines": [{"starttime": "2020-01-01T00:00:00", "endtime": "2026-01-01T00:00:00"}]},
+      {"prefix": "108.61.0.0/16", "timelines": [{"starttime": "2020-01-01T00:00:00", "endtime": "2026-01-01T00:00:00"}]},
+      {"prefix": "45.63.0.0/18", "timelines": [{"starttime": "2020-01-01T00:00:00", "endtime": "2026-01-01T00:00:00"}]}
+    ]
+  }
+}

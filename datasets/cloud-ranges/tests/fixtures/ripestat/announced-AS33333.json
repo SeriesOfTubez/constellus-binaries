@@ -1,0 +1,9 @@
+{
+  "status": "ok",
+  "data": {
+    "resource": "AS33333",
+    "prefixes": [
+      {"prefix": "2001:db8::/32", "timelines": [{"starttime": "2020-01-01T00:00:00", "endtime": "2026-01-01T00:00:00"}]}
+    ]
+  }
+}

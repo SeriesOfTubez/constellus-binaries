@@ -1,0 +1,10 @@
+{
+  "status": "ok",
+  "data": {
+    "resource": "AS99999",
+    "prefixes": [
+      {"prefix": "198.51.100.128/28", "timelines": [{"starttime": "2020-01-01T00:00:00", "endtime": "2026-01-01T00:00:00"}]},
+      {"prefix": "203.0.113.0/24", "timelines": [{"starttime": "2020-01-01T00:00:00", "endtime": "2026-01-01T00:00:00"}]}
+    ]
+  }
+}

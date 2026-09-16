@@ -1,0 +1,14 @@
+{
+  "status": "ok",
+  "data": {
+    "resource": "78.46.0.0/15",
+    "records": [
+      [
+        {"key": "inetnum", "value": "78.46.0.0 - 78.47.255.255", "comment": null, "details_link": null},
+        {"key": "netname", "value": "HETZNER-RZ15", "comment": null, "details_link": null},
+        {"key": "remarks", "value": "no geofeed published", "comment": null, "details_link": null}
+      ]
+    ],
+    "irr_records": []
+  }
+}

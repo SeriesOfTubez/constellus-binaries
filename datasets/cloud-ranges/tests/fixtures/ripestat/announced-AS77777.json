@@ -1,0 +1,9 @@
+{
+  "status": "ok",
+  "data": {
+    "resource": "AS77777",
+    "prefixes": [
+      {"prefix": "192.0.2.0/24", "timelines": [{"starttime": "2020-01-01T00:00:00", "endtime": "2026-01-01T00:00:00"}]}
+    ]
+  }
+}

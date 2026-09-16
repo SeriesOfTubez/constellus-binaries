@@ -1,0 +1,79 @@
+name: geofeed-discovery
+
+# Discovers RFC 9092 geofeed URLs for long-tail hosting providers by reading RIR
+# whois, rather than hand-maintaining a list of URLs that rots silently.
+#
+# Split from the daily cloud-ranges job on purpose: this crawls RIPEstat one
+# prefix at a time with a polite delay, so it is slow and changes rarely. It
+# commits `discovered_geofeeds.json`, which the daily job then consumes as an
+# ordinary input. Failure here leaves the last good file in place; the daily job
+# keeps running on it.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly. Geofeed publication changes on the timescale of a provider
+    # updating its whois record.
+    - cron: "40 4 * * 2"
+
+permissions:
+  contents: write   # commit the refreshed discovery result
+
+concurrency:
+  group: geofeed-discovery
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Discover geofeeds
+        run: |
+          python datasets/cloud-ranges/discover_geofeeds.py \
+            --out datasets/cloud-ranges/discovered_geofeeds.json \
+            --max-prefixes 25 \
+            --sleep 1.0
+
+      - name: Summary
+        run: |
+          {
+            echo "### Geofeed discovery $(jq -r .generated_at datasets/cloud-ranges/discovered_geofeeds.json)"
+            echo ""
+            echo "Seeds queried: $(jq -r .seeds_queried datasets/cloud-ranges/discovered_geofeeds.json), failed: $(jq -r .seeds_failed datasets/cloud-ranges/discovered_geofeeds.json)"
+            echo ""
+            echo "| provider | geofeed | format |"
+            echo "|---|---|---|"
+            jq -r '.geofeeds[] | "| \(.provider) | \(.url) | \(.format) |"' datasets/cloud-ranges/discovered_geofeeds.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Commit only on change: `generated_at` moves every run, so diff the
+      # meaningful part instead and restore the file when only the timestamp
+      # shifted. Otherwise this would commit weekly noise forever.
+      - name: Commit on change
+        run: |
+          f=datasets/cloud-ranges/discovered_geofeeds.json
+          if git diff --quiet -- "$f"; then
+            echo "No change." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          old=$(git show "HEAD:$f" 2>/dev/null | jq -Sc '.geofeeds' || echo "null")
+          new=$(jq -Sc '.geofeeds' "$f")
+          if [ "$old" = "$new" ]; then
+            echo "Only the timestamp moved - not committing." >> "$GITHUB_STEP_SUMMARY"
+            git checkout -- "$f"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$f"
+          git commit \
+            -m "chore(cloud-ranges): refresh discovered geofeeds" \
+            -m "Discovered via RFC 9092 geofeed attributes in RIR whois."
+          git push
+          echo "Committed." >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,13 @@
+{
+  "status": "ok",
+  "data": {
+    "resource": "AS24940",
+    "prefixes": [
+      {"prefix": "5.9.0.0/16", "timelines": [{"starttime": "2020-01-01T00:00:00", "endtime": "2026-01-01T00:00:00"}]},
+      {"prefix": "78.46.0.0/15", "timelines": [{"starttime": "2020-01-01T00:00:00", "endtime": "2026-01-01T00:00:00"}]},
+      {"prefix": "88.99.0.0/16", "timelines": [{"starttime": "2020-01-01T00:00:00", "endtime": "2026-01-01T00:00:00"}]},
+      {"prefix": "136.243.0.0/16", "timelines": [{"starttime": "2020-01-01T00:00:00", "endtime": "2026-01-01T00:00:00"}]},
+      {"prefix": "148.251.0.0/16", "timelines": [{"starttime": "2020-01-01T00:00:00", "endtime": "2026-01-01T00:00:00"}]}
+    ]
+  }
+}

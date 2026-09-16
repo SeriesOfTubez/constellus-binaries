@@ -1,0 +1,14 @@
+{
+  "status": "ok",
+  "data": {
+    "resource": "192.0.2.0/24",
+    "records": [
+      [
+        {"key": "inetnum", "value": "192.0.2.0 - 192.0.2.255", "comment": null, "details_link": null},
+        {"key": "netname", "value": "TEST-UNREACHABLE", "comment": null, "details_link": null},
+        {"key": "geofeed", "value": "https://example.test/unreachable-geofeed", "comment": null, "details_link": null}
+      ]
+    ],
+    "irr_records": []
+  }
+}
