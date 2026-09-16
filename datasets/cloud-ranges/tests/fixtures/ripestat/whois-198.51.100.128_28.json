@@ -1,0 +1,14 @@
+{
+  "status": "ok",
+  "data": {
+    "resource": "198.51.100.128/28",
+    "records": [
+      [
+        {"key": "inetnum", "value": "198.51.100.128 - 198.51.100.143", "comment": null, "details_link": null},
+        {"key": "netname", "value": "TEST-HIT", "comment": null, "details_link": null},
+        {"key": "remarks", "value": "GeoFeed https://example.test/geo.csv.", "comment": null, "details_link": null}
+      ]
+    ],
+    "irr_records": []
+  }
+}

@@ -1,0 +1,184 @@
+{
+  "schema_version": 1,
+  "_comment": [
+    "Registry of published cloud provider IP range feeds, plus the mapping from each",
+    "provider's own service token to the normalised service_class enum.",
+    "See SCHEMA.md for the meaning of every field and of each service_class value.",
+    "",
+    "service_class is a faithful restatement of what the provider published - it is NOT",
+    "a tenancy verdict. Deciding 'this IP is single-tenant, we may scan it' is the",
+    "consumer's job (planning#181/#182), and must stay composed with a separate",
+    "ownership cap. See the recycled-address safety note in planning#178."
+  ],
+  "sources": [
+    {
+      "id": "aws",
+      "provider": "aws",
+      "tier": "A",
+      "parser": "aws",
+      "url": "https://ip-ranges.amazonaws.com/ip-ranges.json",
+      "change_token": "syncToken",
+      "min_prefixes": 10000,
+      "classes": {
+        "catch_all": ["AMAZON"],
+        "map": {
+          "EC2": "compute",
+          "CLOUDFRONT": "edge",
+          "CLOUDFRONT_ORIGIN_FACING": "edge",
+          "GLOBALACCELERATOR": "edge",
+          "S3": "storage",
+          "EBS": "storage",
+          "EFS": "storage"
+        },
+        "default": "managed"
+      }
+    },
+    {
+      "id": "azure",
+      "provider": "azure",
+      "tier": "A",
+      "parser": "azure",
+      "url": "https://download.microsoft.com/download/7/1/D/71D86715-5596-4529-9B13-DA13A5DE5B63/ServiceTags_Public_Latest.json",
+      "change_token": "changeNumber",
+      "min_prefixes": 60000,
+      "classes": {
+        "_comment": "Azure publishes NO virtual-machine service tag. Customer VM space sits in the region catch-alls (AzureCloud.<region>), which carry an empty systemService and therefore classify as unknown. Every named systemService is a Microsoft-operated service, so the default is managed.",
+        "catch_all": [""],
+        "map": {
+          "AzureFrontDoor": "edge",
+          "AzureTrafficManager": "edge",
+          "AzureCDN": "edge",
+          "AzureStorage": "storage",
+          "AzureDataLake": "storage",
+          "StorageSyncService": "storage",
+          "StorageMover": "storage",
+          "AzureContainerRegistry": "storage",
+          "MicrosoftContainerRegistry": "storage"
+        },
+        "default": "managed"
+      }
+    },
+    {
+      "id": "oci",
+      "provider": "oci",
+      "tier": "A",
+      "parser": "oci",
+      "url": "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json",
+      "change_token": "last_updated_timestamp",
+      "min_prefixes": 800,
+      "classes": {
+        "_comment": "OCI's plain 'OCI' tag spans customer VCN space AND Oracle-run services in the same CIDRs, so it is a catch-all, not a compute token. OSN is the Oracle Services Network.",
+        "catch_all": ["OCI"],
+        "map": {
+          "OBJECT_STORAGE": "storage",
+          "OSN": "managed"
+        },
+        "default": "managed"
+      }
+    },
+    {
+      "id": "gcp",
+      "provider": "gcp",
+      "tier": "A",
+      "parser": "gcp",
+      "url": "https://www.gstatic.com/ipranges/cloud.json",
+      "change_token": "syncToken",
+      "min_prefixes": 600,
+      "classes": {
+        "_comment": "cloud.json carries region scope but a single 'Google Cloud' service token for every prefix - no service discriminator at all. Everything is a catch-all.",
+        "catch_all": ["Google Cloud"],
+        "map": {},
+        "default": "unknown"
+      }
+    },
+    {
+      "id": "google",
+      "provider": "google",
+      "tier": "A",
+      "parser": "google",
+      "url": "https://www.gstatic.com/ipranges/goog.json",
+      "change_token": "syncToken",
+      "min_prefixes": 80,
+      "classes": {
+        "_comment": "goog.json is the superset of all Google-announced space with no service field. Useful only to say 'Google announces this', hence unknown.",
+        "catch_all": [],
+        "map": {},
+        "default": "unknown"
+      }
+    },
+    {
+      "id": "cloudflare",
+      "provider": "cloudflare",
+      "tier": "A",
+      "parser": "plaintext_cidr",
+      "url": ["https://www.cloudflare.com/ips-v4", "https://www.cloudflare.com/ips-v6"],
+      "change_token": null,
+      "min_prefixes": 15,
+      "classes": {
+        "_comment": "Cloudflare's published ranges are its anycast edge in full. Multi-tenant by construction.",
+        "catch_all": [],
+        "map": {},
+        "default": "edge"
+      }
+    },
+    {
+      "id": "fastly",
+      "provider": "fastly",
+      "tier": "A",
+      "parser": "fastly",
+      "url": "https://api.fastly.com/public-ip-list",
+      "change_token": null,
+      "min_prefixes": 12,
+      "classes": {
+        "catch_all": [],
+        "map": {},
+        "default": "edge"
+      }
+    },
+    {
+      "id": "digitalocean",
+      "provider": "digitalocean",
+      "tier": "B",
+      "parser": "geofeed_csv",
+      "url": "https://digitalocean.com/geo/google.csv",
+      "change_token": null,
+      "min_prefixes": 700,
+      "classes": {
+        "_comment": "RFC 8805 geofeed - prefix and location only, no service type. DigitalOcean is a pure VPS provider with no multi-tenant edge product sharing this space, so range membership alone implies a customer droplet. This default is a provider-level judgement recorded here, not something the feed states.",
+        "catch_all": [],
+        "map": {},
+        "default": "compute"
+      }
+    },
+    {
+      "id": "linode",
+      "provider": "linode",
+      "tier": "B",
+      "parser": "geofeed_csv",
+      "url": "https://geoip.linode.com/",
+      "change_token": null,
+      "min_prefixes": 3000,
+      "classes": {
+        "_comment": "Same reasoning as digitalocean.",
+        "catch_all": [],
+        "map": {},
+        "default": "compute"
+      }
+    },
+    {
+      "id": "vultr",
+      "provider": "vultr",
+      "tier": "B",
+      "parser": "vultr",
+      "url": "https://geofeed.constant.com/?json",
+      "change_token": "updated",
+      "min_prefixes": 300,
+      "classes": {
+        "_comment": "Same reasoning as digitalocean.",
+        "catch_all": [],
+        "map": {},
+        "default": "compute"
+      }
+    }
+  ]
+}

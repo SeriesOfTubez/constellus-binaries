@@ -1,0 +1,6 @@
+{
+  "status": "error",
+  "status_code": 400,
+  "messages": [["error", "Resource 'AS55555' does not exist"]],
+  "data": {}
+}

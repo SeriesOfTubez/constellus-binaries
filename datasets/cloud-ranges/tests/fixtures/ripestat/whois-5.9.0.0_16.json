@@ -1,0 +1,13 @@
+{
+  "status": "ok",
+  "data": {
+    "resource": "5.9.0.0/16",
+    "records": [
+      [
+        {"key": "inetnum", "value": "5.9.0.0 - 5.9.255.255", "comment": null, "details_link": null},
+        {"key": "netname", "value": "HETZNER-RZ", "comment": null, "details_link": null}
+      ]
+    ],
+    "irr_records": []
+  }
+}

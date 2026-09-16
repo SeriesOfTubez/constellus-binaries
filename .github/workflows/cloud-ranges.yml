@@ -1,0 +1,199 @@
+name: cloud-ranges
+
+# Mirrors the published cloud provider IP range feeds, normalises them to one
+# schema, and publishes the result as a versioned, digest-pinnable release.
+# Constellus consumes it as a tenancy signal (planning#179 under epic#178).
+#
+# Why mirror feeds that all have stable URLs: normalise nine shapes once rather
+# than in the product; keep a versioned audit trail, since this dataset feeds
+# authorisation decisions; give egress-restricted deployments one outbound
+# dependency instead of nine; and make a provider's format change fail one build
+# loudly instead of silently altering a safety gate everywhere.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "datasets/cloud-ranges/**"
+      - ".github/workflows/cloud-ranges.yml"
+  push:
+    branches: [main]
+    paths:
+      - "datasets/cloud-ranges/**"
+      - ".github/workflows/cloud-ranges.yml"
+  schedule:
+    # Daily. AWS changes several times a week; the others less often. The job
+    # exits without publishing when nothing moved.
+    - cron: "17 5 * * *"
+
+permissions:
+  contents: write      # create the release
+  id-token: write      # OIDC for provenance attestation
+  attestations: write  # write the SLSA provenance attestation
+
+concurrency:
+  group: cloud-ranges
+  cancel-in-progress: false
+
+jobs:
+  # The parsers are the thing most likely to break, and they are only safe to
+  # change if their offline fixtures still pass. Gate every run on them.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Unit tests (offline fixtures, no network)
+        # Run from the dataset directory: `cloud-ranges` contains a hyphen, so
+        # unittest cannot build a dotted module name for it from the repo root
+        # and discovery fails with "Start directory is not importable". Running
+        # here also puts the scripts on sys.path for the tests to import.
+        working-directory: datasets/cloud-ranges
+        run: python -m unittest discover -s tests -v
+
+  build:
+    needs: test
+    # A pull request proves the parsers still work; it must not publish.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The previous manifest is what makes this run idempotent: it carries the
+      # last dataset digest (skip publishing when unchanged) and the last
+      # per-source record counts (fail on a suspicious collapse).
+      - name: Fetch previous manifest
+        run: |
+          mkdir -p prev
+          if gh release download cloud-ranges-latest --pattern manifest.json --dir prev 2>/dev/null; then
+            echo "previous manifest: $(jq -r .generated_at prev/manifest.json)"
+          else
+            echo "no previous release - treating as first run"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # Fetches all feeds, validates each shape, and aborts non-zero on a shape
+      # change, an unparseable prefix, or a prefix count below the source's
+      # floor. That failure is the point: a silent pass would feed stale or
+      # wrong ranges into a probe-authorisation decision.
+      - name: Normalise feeds
+        id: normalise
+        run: |
+          python datasets/cloud-ranges/normalize.py \
+            --out-dir out \
+            --previous-manifest prev/manifest.json \
+            --discovered datasets/cloud-ranges/discovered_geofeeds.json
+
+      - name: Summary
+        run: |
+          {
+            echo "### Cloud ranges $(jq -r .generated_at out/manifest.json)"
+            echo ""
+            echo "Changed: \`${{ steps.normalise.outputs.changed }}\`"
+            echo "Records: **$(jq -r .record_count out/manifest.json)**"
+            echo "Digest: \`$(jq -r .dataset_sha256 out/manifest.json)\`"
+            echo ""
+            echo "| source | records | bytes | change token |"
+            echo "|---|---:|---:|---|"
+            jq -r '.sources[] | "| \(.id) | \(.record_count) | \(.bytes) | \(.change_token // "-") |"' out/manifest.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Everything below only runs when the dataset actually moved ──
+
+      - name: Package raw feeds
+        if: steps.normalise.outputs.changed == 'true'
+        # The raw bytes travel with the release so any published dataset can be
+        # re-derived from the exact input it was built from.
+        run: tar -czf out/raw-feeds.tar.gz -C out/raw .
+
+      - name: Tag
+        if: steps.normalise.outputs.changed == 'true'
+        id: tag
+        # Date-stamped, with a counter so two changes in one day don't collide.
+        run: |
+          base="cloud-ranges-$(date -u +%Y.%m.%d)"
+          tag="$base"
+          n=1
+          while gh release view "$tag" >/dev/null 2>&1; do
+            tag="${base}-${n}"
+            n=$((n + 1))
+          done
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Attest build provenance (SLSA)
+        if: steps.normalise.outputs.changed == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            out/cloud-ranges.ndjson.gz
+            out/manifest.json
+
+      - name: Publish release
+        if: steps.normalise.outputs.changed == 'true'
+        run: |
+          notes=$(mktemp)
+          {
+            echo "Normalised cloud provider IP ranges."
+            echo ""
+            echo "- Generated: \`$(jq -r .generated_at out/manifest.json)\`"
+            echo "- Records: **$(jq -r .record_count out/manifest.json)**"
+            echo "- \`dataset_sha256\`: \`$(jq -r .dataset_sha256 out/manifest.json)\`"
+            echo ""
+            echo "Pin \`dataset_sha256\` alongside the decision it informed; see"
+            echo "[SCHEMA.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/datasets/cloud-ranges/SCHEMA.md)."
+            echo ""
+            echo "| source | records | change token |"
+            echo "|---|---:|---|"
+            jq -r '.sources[] | "| \(.id) | \(.record_count) | \(.change_token // "-") |"' out/manifest.json
+          } > "$notes"
+
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            --title "${{ steps.tag.outputs.tag }}" \
+            --notes-file "$notes" \
+            out/cloud-ranges.ndjson.gz \
+            out/manifest.json \
+            out/raw-feeds.tar.gz
+
+          # `cloud-ranges-latest` is a moving pointer so a consumer has one
+          # stable URL to resolve; the dated release is the immutable record,
+          # and dataset_sha256 is what you actually pin.
+          gh release delete cloud-ranges-latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create cloud-ranges-latest \
+            --title "cloud-ranges (latest)" \
+            --notes "Moving pointer to ${{ steps.tag.outputs.tag }}. Pin \`dataset_sha256\` from \`manifest.json\`, not this tag." \
+            out/cloud-ranges.ndjson.gz \
+            out/manifest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # A day with no feed change still has to refresh the pointer's manifest.
+      # `generated_at` is the consumer's staleness signal, and it must mean
+      # "last verified current", not "last time the bytes happened to move" -
+      # otherwise a run of quiet days is indistinguishable from a silently
+      # broken job, which is the exact failure this pipeline exists to prevent.
+      # The dataset asset is left untouched; only the manifest is replaced, and
+      # dataset_sha256 in it still identifies the unchanged content.
+      - name: Refresh staleness marker
+        if: steps.normalise.outputs.changed != 'true'
+        run: |
+          echo "No feed changed since the last release - dataset not republished." >> "$GITHUB_STEP_SUMMARY"
+          if gh release view cloud-ranges-latest >/dev/null 2>&1; then
+            gh release upload cloud-ranges-latest out/manifest.json --clobber
+            echo "Refreshed \`generated_at\` on \`cloud-ranges-latest\`." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::No cloud-ranges-latest release exists but the dataset reports unchanged - the previous manifest and the release are out of sync."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}

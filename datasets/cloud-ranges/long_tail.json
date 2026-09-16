@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "Seed ASNs for RFC 9092 geofeed discovery. These are SEEDS, not a URL list:",
+    "the geofeed URL (if any) is read out of RIR whois at run time, so a provider",
+    "that starts publishing one is picked up without a code change.",
+    "Adding a provider here does NOT make its ranges count as customer compute -",
+    "discovered geofeeds are classified 'unknown' until a reviewed edit to",
+    "sources.json says otherwise."
+  ],
+  "seeds": [
+    {"provider": "hetzner",  "asn": 24940},
+    {"provider": "ovh",      "asn": 16276},
+    {"provider": "ionos",    "asn": 8560},
+    {"provider": "scaleway", "asn": 12876},
+    {"provider": "vultr",    "asn": 20473}
+  ]
+}

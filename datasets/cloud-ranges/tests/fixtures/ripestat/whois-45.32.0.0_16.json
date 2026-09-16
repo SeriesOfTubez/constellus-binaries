@@ -1,0 +1,14 @@
+{
+  "status": "ok",
+  "data": {
+    "resource": "45.32.0.0/16",
+    "records": [
+      [
+        {"key": "inetnum", "value": "45.32.0.0 - 45.32.255.255", "comment": null, "details_link": null},
+        {"key": "netname", "value": "VULTR", "comment": null, "details_link": null},
+        {"key": "Comment", "value": "Geofeed https://geofeed.constant.com/", "comment": null, "details_link": null}
+      ]
+    ],
+    "irr_records": []
+  }
+}
