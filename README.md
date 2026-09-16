@@ -29,6 +29,32 @@ When `govulncheck` flags a *reachable* vuln: bump to a fixed upstream version �
 file upstream + temporarily pin → fork+patch (last resort) → or accept with a
 documented, time-boxed justification.
 
+### Accepting a finding (`GOVULN_ALLOW`)
+That last option is the only one with an escape hatch, so it is deliberately a
+narrow one. The gate stays **deny-by-default**: any reachable finding fails the
+build unless it is named in the binary's `GOVULN_ALLOW` *and* its review date is
+still in the future.
+
+```sh
+# binaries/<name>/build.env
+GOVULN_ALLOW=GO-2026-5932:2026-10-16     # space-separated ID:YYYY-MM-DD entries
+```
+
+- **Reachable means symbol-level** — a trace naming a function the built command
+  actually calls. Findings that are merely imported or required never reach the
+  gate, which is what keeps it actionable.
+- **The date is a review deadline, not a snooze.** Once it passes the build
+  fails until someone re-reads the finding. Extending it is a decision with a
+  commit message, not an edit.
+- **An entry that is no longer reachable warns rather than fails** — upstream
+  fixing something must not break the build — and tells you to delete it.
+- **Only the named ID is accepted.** A new reachable finding fails even while an
+  existing acceptance is live.
+- Write the justification as a comment above the entry: why no fix exists, what
+  the reachable path actually is, and what has to change for it to be removed.
+
+A binary with no `GOVULN_ALLOW` is gated strictly, which is the normal case.
+
 ## Layout
 ```
 binaries/<name>/build.env   # REPO, VERSION (pinned tag), PKG, BIN, GO_VERSION

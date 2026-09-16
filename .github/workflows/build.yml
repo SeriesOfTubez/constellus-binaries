@@ -72,7 +72,31 @@ jobs:
           # gate verifies the exact module tree we ship.
           if [ -n "$GO_PATCHES" ]; then go get $GO_PATCHES && go mod tidy; fi
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          "$(go env GOPATH)/bin/govulncheck" "$PKG/..."
+
+          # Exit 3 means "vulnerabilities found", which is not a verdict yet —
+          # the allowlist decides. Any other non-zero is a real tool failure.
+          set +e
+          "$(go env GOPATH)/bin/govulncheck" -format json "$PKG/..." > govuln.json
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then
+            echo "::error::govulncheck failed to run (exit $rc)"
+            exit 1
+          fi
+
+          # Reachable == symbol-level: the trace names a function the built
+          # command actually calls. Findings that are merely imported or
+          # required carry no function, and filtering on it is what keeps this
+          # gate low-noise — at cdncheck v1.3.1 that is 1 reachable finding
+          # rather than 3.
+          jq -r 'select(.finding != null)
+                 | select(.finding.trace[0].function != null)
+                 | .finding.osv' govuln.json | sort -u > reachable.txt
+
+          # Human-readable rendering in the log, for whoever has to act on it.
+          "$(go env GOPATH)/bin/govulncheck" -format text "$PKG/..." || true
+
+          bash "$GITHUB_WORKSPACE/.github/scripts/govuln-gate.sh" reachable.txt
 
       # Building without pushing catches what govulncheck cannot: a Dockerfile
       # that no longer compiles, a bad build-arg, a base image that moved. That
