@@ -97,5 +97,15 @@ audit for code `urllib` already covers.
 ## Published
 | Artifact | Kind | Source | Version |
 |----------|------|--------|---------|
-| zgrab2 | image | [zmap/zgrab2](https://github.com/zmap/zgrab2) | v1.0.0 |
+| zgrab2 | image | [zmap/zgrab2](https://github.com/zmap/zgrab2) | `master-e5172a7` |
+| cdncheck | image | [projectdiscovery/cdncheck](https://github.com/projectdiscovery/cdncheck) | v1.3.1 |
 | cloud-ranges | dataset | 10 provider feeds + RIR-discovered geofeeds | `cloud-ranges-latest` |
+
+Versions here are the published image tag, which is `VERSION` in each
+`build.env` — zgrab2 is built from a pinned commit rather than a tag, because
+v1.0.0 predates the `rdp` module the scanner-worker needs (planning#67).
+
+**cdncheck consumers must pass `-duc`.** It runs an update check against
+ProjectDiscovery on every invocation otherwise. Note also that its CIDR/ASN
+dataset is `//go:embed`-ed at build time, so the ranges only move when the pin
+is bumped and the image rebuilt — see `binaries/cdncheck/build.env`.

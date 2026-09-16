@@ -41,7 +41,7 @@ jobs:
       matrix:
         # Add a binary: create binaries/<name>/ (build.env + Dockerfile) and list
         # it here AND in `publish` below — the two matrices must stay in step.
-        binary: [zgrab2]
+        binary: [zgrab2, cdncheck]
     steps:
       - uses: actions/checkout@v4
 
@@ -107,7 +107,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        binary: [zgrab2]
+        binary: [zgrab2, cdncheck]
     steps:
       - uses: actions/checkout@v4
 
