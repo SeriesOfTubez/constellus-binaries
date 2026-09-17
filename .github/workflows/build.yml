@@ -2,38 +2,51 @@ name: build-binaries
 
 on:
   workflow_dispatch:
+  # A pull request runs `verify` only — it proves the security gate still passes
+  # and the image still builds, and it must not publish. Same split the
+  # cloud-ranges workflow already uses; see the `publish` job's `if:` below.
+  pull_request:
+    paths:
+      - "binaries/**"
+      - ".github/workflows/build.yml"
+      - ".github/scripts/**"
   push:
     branches: [main]
     paths:
       - "binaries/**"
       - ".github/workflows/build.yml"
+      - ".github/scripts/**"
   schedule:
     # Weekly re-scan: re-run govulncheck/Trivy against the published pins so a
     # newly-disclosed reachable vuln fails the build even without a version bump.
     - cron: "0 6 * * 1"
 
-permissions:
-  contents: read
-  packages: write       # push image to GHCR
-  id-token: write        # OIDC for provenance attestation
-  attestations: write    # write the SLSA provenance attestation
+# Deliberately NO workflow-level `permissions:` block. Each job declares its own,
+# so a pull_request run cannot write packages or attestations even in principle —
+# not merely "does not happen to". The whole point of this repo is that what we
+# publish is attested, so the boundary is worth more than the convenience.
 
 jobs:
-  build:
+  # ── Gate: runs everywhere, publishes nothing ────────────────────────────────
+  # This is the job that decides whether a binary is fit to ship. Running it on
+  # pull_request is the point of the split: previously it fired only on push to
+  # main, so a change to the gate itself got its first execution *after* merge,
+  # on the branch where a failure blocks publishing rather than a review.
+  verify:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
-        # Add a binary: create binaries/<name>/ (build.env + Dockerfile) and list it here.
+        # Add a binary: create binaries/<name>/ (build.env + Dockerfile) and list
+        # it here AND in `publish` below — the two matrices must stay in step.
         binary: [zgrab2]
     steps:
       - uses: actions/checkout@v4
 
       - name: Load build config
         run: grep -vE '^\s*(#|$)' "binaries/${{ matrix.binary }}/build.env" >> "$GITHUB_ENV"
-
-      - name: Lowercase owner (GHCR requires lowercase)
-        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
 
       - uses: actions/setup-go@v5
         with:
@@ -61,7 +74,56 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" "$PKG/..."
 
+      # Building without pushing catches what govulncheck cannot: a Dockerfile
+      # that no longer compiles, a bad build-arg, a base image that moved. That
+      # class of breakage previously reached main before anything ran it.
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: "binaries/${{ matrix.binary }}"
+          push: false
+          tags: "${{ matrix.binary }}:ci"   # local only; never resolved to a registry
+          build-args: |
+            REPO=${{ env.REPO }}
+            VERSION=${{ env.VERSION }}
+            REF=${{ env.REF }}
+            PKG=${{ env.PKG }}
+            BIN=${{ env.BIN }}
+            GO_VERSION=${{ env.GO_VERSION }}
+            GO_PATCHES=${{ env.GO_PATCHES }}
+
+  # ── Publish: main and scheduled runs only ───────────────────────────────────
+  # `needs: verify` means an unpublishable binary never reaches GHCR. The `if:`
+  # is what keeps a pull request from publishing; `needs` alone would not.
+  publish:
+    needs: verify
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write       # push image to GHCR
+      id-token: write        # OIDC for provenance attestation
+      attestations: write    # write the SLSA provenance attestation
+    strategy:
+      fail-fast: false
+      matrix:
+        binary: [zgrab2]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load build config
+        run: grep -vE '^\s*(#|$)' "binaries/${{ matrix.binary }}/build.env" >> "$GITHUB_ENV"
+
+      - name: Lowercase owner (GHCR requires lowercase)
+        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
       # ── Build + publish the versioned image (static binary in scratch) ──
+      # Note this recompiles what `verify` just built — layer cache does not
+      # cross jobs. That is a deliberate trade: a few minutes on merge/schedule
+      # runs (never on PRs, which run `verify` alone) in exchange for a hard
+      # permission boundary. Passing the image between jobs as an artifact would
+      # avoid it, at the cost of more moving parts in the path that signs what
+      # we ship — not a trade worth making here.
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
