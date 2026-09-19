@@ -113,6 +113,46 @@ substantiated is dropped rather than flagged — the same posture the product
 applies to findings. A discovered feed that survives containment with zero
 records is not an error; its count sits in the manifest to be read.
 
+## Special-purpose address space is dropped, from every feed
+
+A feed can list prefixes IANA has **reserved** rather than allocated. The live
+vultr geofeed published seven, and because the vultr parser defaults every line
+to `compute`, all seven entered the dataset as Vultr compute space:
+
+| prefix | reserved for |
+|---|---|
+| `192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24` | IPv4 documentation (RFC 5737) |
+| `2001:db8::/32` | IPv6 documentation (RFC 3849) |
+| `2001:2::/48` | benchmarking (RFC 5180) |
+| `2001:10::/28` | ORCHID, deprecated (RFC 4843) |
+| `2002::/16` | 6to4 transition (RFC 3056) |
+
+Nobody holds an allocation for any of them, so an IP inside one cannot be a
+customer instance — and the mislabel is not cosmetic. The product's
+`tenancy_enricher` reads a `compute` match as `single_tenant`, which is a
+*promoting* verdict in the probe-authorisation gate.
+
+**The filter is a predicate, not a blocklist:** `not ip_network(p).is_global`,
+which is CPython's rendering of the "Globally Reachable" column of the IANA
+Special-Purpose Address Registry (RFC 6890). It therefore covers the whole
+registry and keeps covering it as entries are added. A hand-written "drop the
+documentation ranges" list would have caught three of the seven and looked
+correct — `2002::/16` is a live transition range, not documentation space.
+
+Dropped rather than flagged, for the same reason containment drops: a flag
+pushes the predicate into every reader, and a reader that forgets it fails in
+the *promoting* direction, whereas dropping fails the safe way — the consumer
+sees no match and escalates.
+
+**The build does not fail on a handful, but does fail on a flood.** A daily
+build that died over one provider's stray entries would stop the dataset
+refreshing for every other provider, and a stale dataset is the worse failure.
+But a silent drop of 40,000 prefixes would look exactly like a clean build, so
+the count is bounded: `max(100, 0.5% of records)`, today 628 against 7 actual.
+The floor is what does the work — a bare percentage fires hardest on the
+smallest builds, which is backwards — and the fraction is there so the bound
+keeps scaling if the dataset grows.
+
 ## Overlapping prefixes are expected — do not dedupe
 
 AWS and Azure both publish the *same* CIDR under a catch-all and again under
@@ -134,6 +174,8 @@ this pipeline would throw away the only signal it exists to carry.
   "generated_at": "2026-09-16T04:12:03Z",
   "dataset_sha256": "…",
   "record_count": 121874,
+  "special_purpose_dropped": 7,
+  "special_purpose_prefixes": ["192.0.2.0/24", "…", "2002::/16"],
   "sources": [
     {
       "id": "aws",
@@ -142,11 +184,19 @@ this pipeline would throw away the only signal it exists to carry.
       "sha256": "…",
       "bytes": 2702456,
       "change_token": "1789519625",
-      "record_count": 17472
+      "record_count": 17472,
+      "special_purpose_dropped": 0,
+      "special_purpose_prefixes": []
     }
   ]
 }
 ```
+
+`special_purpose_dropped` / `special_purpose_prefixes` appear both per source
+and dataset-wide, so a drop is auditable rather than silent — which feed did it
+and exactly which prefixes. `record_count` is always the count **after** the
+drop. The prefix list is safe to publish in full because the build fails long
+before it could grow large.
 
 `generated_at` is the staleness signal, and it means **last verified current**,
 not "last time the bytes moved". On a day when no feed changed the dataset is
