@@ -21,6 +21,56 @@ from common import FeedError
 
 VALID_CLASSES = {"compute", "edge", "storage", "managed", "unknown"}
 
+# Special-purpose address space (planning#183).
+#
+# A feed can list prefixes that IANA has reserved rather than allocated - the
+# live vultr geofeed publishes seven, and because the vultr parser defaults
+# every line to `compute`, they entered the dataset as Vultr compute space.
+# They are not: nobody holds an allocation for them, so an IP inside one
+# cannot be a customer instance. Downstream that mislabel is not cosmetic -
+# `tenancy_enricher` reads a `compute` match as `single_tenant`, which is a
+# promoting verdict in the probe-authorisation gate.
+#
+# The seven are the RFC 5737 IPv4 documentation trio, RFC 3849 `2001:db8::/32`,
+# RFC 5180 benchmarking, RFC 4843 ORCHID, and RFC 3056 `2002::/16`. That last
+# one is a live 6to4 transition range rather than documentation space, which is
+# why the filter is a predicate and not a blocklist of "the doc ranges": a
+# hand-written list would have missed four of the seven and looked correct.
+#
+# `is_global` is CPython's rendering of the IANA Special-Purpose Address
+# Registry's "Globally Reachable" column (RFC 6890), so one well-defined
+# predicate covers the whole registry and keeps covering it as entries are
+# added. Verified against the full 125,644-row live dataset: it matches those
+# seven prefixes and nothing else.
+#
+# Dropped rather than flagged, for the reason the containment filter below
+# gives: a flag pushes the same predicate into every reader, and a reader that
+# forgets it fails in the promoting direction. Dropping fails the other way -
+# Tier 0 returns `undetermined` and the IP escalates to a later tier.
+
+
+def _is_special_purpose(prefix: str) -> bool:
+    return not ipaddress.ip_network(prefix, strict=False).is_global
+
+
+# A feed carrying a handful of these is routine (today: 7 of 125,644) and must
+# not stop the daily refresh for every other provider - a stale dataset is a
+# worse failure than a filtered one, and `tenancy_enricher` already treats
+# staleness as loud. Thousands means the parser has started reading the wrong
+# field, and a silent drop that large would look exactly like a clean build.
+# So: count quietly under the bound, fail above it. The bound is a tripwire for
+# a shape change, not an accounting tolerance, and is deliberately loose.
+#
+# The bound is max(floor, fraction), NOT either one alone, and the floor is
+# what does the work. A fraction on its own inverts: 7 drops is 0.006% of the
+# live dataset but 2.8% of the trimmed offline fixtures, so a percentage
+# tripwire fires hardest on the smallest builds - exactly backwards. A floor on
+# its own stops scaling if the dataset grows an order of magnitude. Together:
+# never fail under `_DROP_FLOOR` however small the build, and above that let
+# the bound track the dataset (628 at today's 125,644 rows).
+_SPECIAL_PURPOSE_DROP_FLOOR = 100
+_SPECIAL_PURPOSE_DROP_FRACTION = 0.005
+
 
 # ---------------------------------------------------------------------------
 # Fetching (network or offline)
@@ -309,6 +359,22 @@ def _process_source(
             }
         )
 
+    # Special-purpose filter, applied to every feed before anything else
+    # looks at these records. See _is_special_purpose above for why this is a
+    # predicate sweep rather than a per-provider fix: it is a vultr defect
+    # today, but the next feed to do it should not need a second issue.
+    special_purpose = sorted(
+        {r["prefix"] for r in records if _is_special_purpose(r["prefix"])},
+        key=_prefix_sort_key,
+    )
+    if special_purpose:
+        records = [r for r in records if not _is_special_purpose(r["prefix"])]
+        print(
+            f"note: {sid}: dropped {len(special_purpose)} special-purpose "
+            f"prefix(es) not globally reachable: {', '.join(special_purpose)}",
+            file=sys.stderr,
+        )
+
     # Containment filter for discovered geofeeds.
     #
     # A geofeed URL found in RIR whois describes whatever space its publisher
@@ -361,6 +427,8 @@ def _process_source(
             "bytes": len(concatenated),
             "change_token": change_token,
             "record_count": count,
+            "special_purpose_dropped": len(special_purpose),
+            "special_purpose_prefixes": special_purpose,
         }
     else:
         manifest_entry = {
@@ -371,6 +439,8 @@ def _process_source(
             "bytes": len(bodies[0]),
             "change_token": change_token,
             "record_count": count,
+            "special_purpose_dropped": len(special_purpose),
+            "special_purpose_prefixes": special_purpose,
         }
 
     return records, manifest_entry
@@ -606,6 +676,35 @@ def main(argv: list[str] | None = None) -> int:
         all_records.extend(records)
         manifest_sources.append(manifest_entry)
 
+    # Dataset-wide special-purpose accounting (planning#183). Per-source counts
+    # stay in each manifest entry, but the bound is checked across the whole
+    # build: a per-source fraction would fail on today's real data, where
+    # vultr's seven prefixes are a noticeable share of one small feed and a
+    # rounding error of the dataset. The denominator is the records that
+    # reached the output plus the drops - a coarse ratio on purpose, since this
+    # is a tripwire for a feed changing shape, not an accounting figure.
+    #
+    # Checked before anything is written, so a build that trips it leaves no
+    # dataset behind for a consumer to pick up.
+    special_purpose_dropped = sum(e["special_purpose_dropped"] for e in manifest_sources)
+    special_purpose_prefixes = sorted(
+        {p for e in manifest_sources for p in e["special_purpose_prefixes"]},
+        key=_prefix_sort_key,
+    )
+    considered = len(all_records) + special_purpose_dropped
+    bound = max(
+        _SPECIAL_PURPOSE_DROP_FLOOR, considered * _SPECIAL_PURPOSE_DROP_FRACTION
+    )
+    if special_purpose_dropped > bound:
+        print(
+            f"error: dropped {special_purpose_dropped} special-purpose prefix(es) "
+            f"of {considered} record(s), over the bound of {bound:.0f}; a feed "
+            f"has probably changed shape rather than published a few stray "
+            f"entries",
+            file=sys.stderr,
+        )
+        return 1
+
     body, dropped, deduped = _serialise(all_records)
 
     dataset_sha256 = common.sha256_bytes(body)
@@ -618,6 +717,8 @@ def main(argv: list[str] | None = None) -> int:
         "generated_at": common.utcnow(),
         "dataset_sha256": dataset_sha256,
         "record_count": len(deduped),
+        "special_purpose_dropped": special_purpose_dropped,
+        "special_purpose_prefixes": special_purpose_prefixes,
         "sources": manifest_sources,
     }
     manifest_path = os.path.join(args.out_dir, "manifest.json")

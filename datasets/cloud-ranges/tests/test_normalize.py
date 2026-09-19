@@ -543,6 +543,11 @@ class PrefixNormalisationTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmpdir, ignore_errors=True)
 
     def test_host_bits_are_cleared(self):
+        # Globally reachable sample prefixes on purpose: the obvious choices
+        # for a host-bits test are RFC 1918 and RFC 3849 space, and the
+        # special-purpose filter drops both before this assertion can run
+        # (planning#183). These are real Cloudflare space, which is also what
+        # the fixture claims to be.
         registry = _low_floor_registry(only_ids=["cloudflare"])
         sources_path = os.path.join(self.tmpdir, "sources_cf_only.json")
         _write_registry(registry, sources_path)
@@ -550,9 +555,9 @@ class PrefixNormalisationTest(unittest.TestCase):
         offline_dir = os.path.join(self.tmpdir, "offline")
         os.makedirs(offline_dir)
         with open(os.path.join(offline_dir, "cloudflare-0.txt"), "w", encoding="utf-8") as fh:
-            fh.write("10.0.0.5/24\n")
+            fh.write("104.16.0.5/24\n")
         with open(os.path.join(offline_dir, "cloudflare-1.txt"), "w", encoding="utf-8") as fh:
-            fh.write("2001:db8::5/32\n")
+            fh.write("2606:4700::5/32\n")
 
         out_dir = os.path.join(self.tmpdir, "out")
         os.makedirs(out_dir)
@@ -569,10 +574,10 @@ class PrefixNormalisationTest(unittest.TestCase):
         self.assertEqual(code, 0, msg=stderr)
         records = read_ndjson(os.path.join(out_dir, "cloud-ranges.ndjson.gz"))
         prefixes = {r["prefix"] for r in records}
-        self.assertIn("10.0.0.0/24", prefixes)
-        self.assertNotIn("10.0.0.5/24", prefixes)
-        self.assertIn("2001:db8::/32", prefixes)
-        self.assertNotIn("2001:db8::5/32", prefixes)
+        self.assertIn("104.16.0.0/24", prefixes)
+        self.assertNotIn("104.16.0.5/24", prefixes)
+        self.assertIn("2606:4700::/32", prefixes)
+        self.assertNotIn("2606:4700::5/32", prefixes)
 
 
 class DiscoveredGeofeedsTest(BaseOfflineTest):
@@ -767,6 +772,120 @@ class DiscoveredGeofeedsTest(BaseOfflineTest):
             ]
         )
         self.assertNotEqual(code, 0)
+
+
+# The seven special-purpose prefixes the live vultr geofeed actually published
+# (planning#183), each entering the dataset as `vultr` / `compute` because the
+# vultr parser defaults every line to compute. Kept here in full rather than
+# reduced to a representative sample: the point of the filter is that it is a
+# predicate over the whole IANA special-purpose registry, and 2002::/16 is the
+# member a hand-written "drop the documentation ranges" list would have missed.
+LIVE_SPECIAL_PURPOSE = [
+    "192.0.2.0/24",       # RFC 5737 documentation
+    "198.51.100.0/24",    # RFC 5737 documentation
+    "203.0.113.0/24",     # RFC 5737 documentation
+    "2001:db8::/32",      # RFC 3849 IPv6 documentation
+    "2001:2::/48",        # RFC 5180 benchmarking
+    "2001:10::/28",       # RFC 4843 ORCHID (deprecated)
+    "2002::/16",          # RFC 3056 6to4 - a live transition range, not doc space
+]
+
+
+class SpecialPurposeFilterTest(BaseOfflineTest):
+    """planning#183: feeds that publish IANA special-purpose space."""
+
+    def _offline_dir_with_vultr_prefixes(self, extra_prefixes: list[str]) -> str:
+        """Copy the fixtures, appending prefixes to the vultr geofeed."""
+        name = f"offline_sp_{len(extra_prefixes)}"
+        offline_dir = os.path.join(self.tmpdir, name)
+        shutil.copytree(FIXTURES_DIR, offline_dir)
+        vultr_path = os.path.join(offline_dir, "vultr.json")
+        with open(vultr_path, encoding="utf-8") as fh:
+            vultr = json.load(fh)
+        template = dict(vultr["subnets"][0])
+        for prefix in extra_prefixes:
+            entry = dict(template)
+            entry["ip_prefix"] = prefix
+            vultr["subnets"].append(entry)
+        with open(vultr_path, "w", encoding="utf-8") as fh:
+            json.dump(vultr, fh)
+        return offline_dir
+
+    def _run(self, offline_dir: str, out_name: str):
+        out_dir = self.out_dir(out_name)
+        code, stdout, stderr = run_normalize(
+            [
+                "--sources",
+                self.sources_path,
+                "--out-dir",
+                out_dir,
+                "--offline-dir",
+                offline_dir,
+            ]
+        )
+        return code, stdout, stderr, out_dir
+
+    def test_live_special_purpose_prefixes_are_dropped_and_counted(self):
+        offline_dir = self._offline_dir_with_vultr_prefixes(LIVE_SPECIAL_PURPOSE)
+        code, _, stderr, out_dir = self._run(offline_dir, "out_sp")
+        self.assertEqual(code, 0, msg=f"stderr={stderr!r}")
+
+        records = read_ndjson(os.path.join(out_dir, "cloud-ranges.ndjson.gz"))
+        prefixes = {r["prefix"] for r in records}
+        for prefix in LIVE_SPECIAL_PURPOSE:
+            self.assertNotIn(prefix, prefixes, msg=f"{prefix} survived the filter")
+
+        # 6to4 is reachable space rather than documentation space, so it is the
+        # one a blocklist-shaped fix would have left behind. Asserted by name so
+        # that a regression to a blocklist fails here loudly.
+        self.assertNotIn("2002::/16", prefixes)
+
+        # The feed's real prefixes are untouched - this filters, it does not
+        # discard the source.
+        self.assertIn("45.32.0.0/21", prefixes)
+
+        with open(os.path.join(out_dir, "manifest.json"), encoding="utf-8") as fh:
+            manifest = json.load(fh)
+
+        self.assertEqual(manifest["special_purpose_dropped"], len(LIVE_SPECIAL_PURPOSE))
+        self.assertEqual(
+            set(manifest["special_purpose_prefixes"]), set(LIVE_SPECIAL_PURPOSE)
+        )
+
+        vultr_entry = next(e for e in manifest["sources"] if e["id"] == "vultr")
+        self.assertEqual(vultr_entry["special_purpose_dropped"], len(LIVE_SPECIAL_PURPOSE))
+        self.assertEqual(
+            set(vultr_entry["special_purpose_prefixes"]), set(LIVE_SPECIAL_PURPOSE)
+        )
+
+        # A drop this small must not fail the daily build: a stale dataset is a
+        # worse outcome than a filtered one.
+        self.assertIn("vultr", stderr)
+
+    def test_clean_feeds_report_zero_dropped(self):
+        code, _, stderr, out_dir = self._run(FIXTURES_DIR, "out_clean")
+        self.assertEqual(code, 0, msg=f"stderr={stderr!r}")
+        with open(os.path.join(out_dir, "manifest.json"), encoding="utf-8") as fh:
+            manifest = json.load(fh)
+        self.assertEqual(manifest["special_purpose_dropped"], 0)
+        self.assertEqual(manifest["special_purpose_prefixes"], [])
+        for entry in manifest["sources"]:
+            self.assertEqual(entry["special_purpose_dropped"], 0, msg=entry["id"])
+
+    def test_mass_drop_fails_the_build_and_writes_no_dataset(self):
+        # A feed changing shape - the parser starts reading the wrong field and
+        # thousands of rows become unroutable. Dropping that many silently would
+        # look exactly like a clean build, so it fails instead.
+        many = [f"2001:db8:{i:x}::/48" for i in range(normalize._SPECIAL_PURPOSE_DROP_FLOOR + 1)]
+        offline_dir = self._offline_dir_with_vultr_prefixes(many)
+        code, _, stderr, out_dir = self._run(offline_dir, "out_mass")
+
+        self.assertNotEqual(code, 0)
+        self.assertIn("special-purpose", stderr)
+        self.assertIn(str(len(many)), stderr)
+        # Failed before serialisation, so no dataset is left for a consumer.
+        self.assertFalse(os.path.exists(os.path.join(out_dir, "cloud-ranges.ndjson.gz")))
+        self.assertFalse(os.path.exists(os.path.join(out_dir, "manifest.json")))
 
 
 if __name__ == "__main__":
