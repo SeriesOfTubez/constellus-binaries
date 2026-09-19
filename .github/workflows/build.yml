@@ -36,12 +36,20 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # A dependency whose go directive outruns GO_VERSION must FAIL, not silently
+      # pull a newer toolchain (Go's default is GOTOOLCHAIN=auto). Otherwise
+      # GO_VERSION stops being binding and — worse — this gate and the Docker build
+      # can resolve different toolchains, so the gate would verify a different
+      # standard library than the one that ships. projectdiscovery/utils#785 makes
+      # this live: it raises utils to `go 1.26.0`.
+      GOTOOLCHAIN: local
     strategy:
       fail-fast: false
       matrix:
         # Add a binary: create binaries/<name>/ (build.env + Dockerfile) and list
         # it here AND in `publish` below — the two matrices must stay in step.
-        binary: [zgrab2]
+        binary: [zgrab2, cdncheck]
     steps:
       - uses: actions/checkout@v4
 
@@ -71,8 +79,76 @@ jobs:
           # Apply the same security dep overrides the image build uses, so the
           # gate verifies the exact module tree we ship.
           if [ -n "$GO_PATCHES" ]; then go get $GO_PATCHES && go mod tidy; fi
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          "$(go env GOPATH)/bin/govulncheck" "$PKG/..."
+          # PINNED, not @latest: the gate below parses govulncheck's JSON, so its
+          # schema is load-bearing for a safety decision. An unpinned upgrade that
+          # restructured `finding.trace` would silently stop matching (see the
+          # fail-closed check further down). Bumping this is a reviewable edit.
+          #
+          # v1.7.0 and not v1.8.0: x/vuln v1.8.0 declares `go 1.26.0`, so under
+          # GOTOOLCHAIN=local it cannot be installed by the Go 1.25.13 we pin. That
+          # is the guard working — with the old @latest + GOTOOLCHAIN=auto, Go was
+          # quietly fetching a 1.26 toolchain to build the scanner. v1.7.0 declares
+          # `go 1.25.0` and keeps tool and analysis on one toolchain.
+          #
+          # Moving to v1.8.0 means moving GO_VERSION to 1.26.x, which is a change to
+          # what we SHIP and deserves its own commit. projectdiscovery/utils#785 will
+          # force that decision soon anyway — it raises utils to `go 1.26.0`.
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+
+          # Exit 3 means "vulnerabilities found", which is not a verdict yet —
+          # the allowlist decides. Any other non-zero is a real tool failure.
+          # `-format json` exits 0 EVEN WITH FINDINGS. Exit 3 ("vulnerabilities
+          # found") is raised only by the text handler's Flush; the JSON handler
+          # implements no Flush at all, so scan.Flush() returns nil for it
+          # (x/vuln v1.7.0: internal/scan/run.go:81+160, jsonhandler.go,
+          # internal/scan/text.go:84). So this exit code is a TOOL-FAILURE signal
+          # and nothing more — never read it as a verdict about findings.
+          set +e
+          "$(go env GOPATH)/bin/govulncheck" -format json "$PKG/..." > govuln.json
+          json_rc=$?
+          set -e
+          if [ "$json_rc" -ne 0 ]; then
+            echo "::error::govulncheck (json) failed to run (exit $json_rc)"
+            exit 1
+          fi
+
+          # Reachable == symbol-level: the trace names a function the built
+          # command actually calls. Findings that are merely imported or
+          # required carry no function, and filtering on it is what keeps this
+          # gate low-noise — at cdncheck v1.3.1 that is 1 reachable finding
+          # rather than 3.
+          jq -r 'select(.finding != null)
+                 | select(.finding.trace[0].function != null)
+                 | .finding.osv' govuln.json | sort -u > reachable.txt
+
+          # Human-readable rendering in the log for whoever has to act on it — and
+          # the ORACLE for the cross-check below. Unlike json, text mode does exit 3,
+          # and exactly when findings match the scan level (symbol, by default),
+          # which is the same question the jq filter above asks.
+          set +e
+          "$(go env GOPATH)/bin/govulncheck" -format text "$PKG/..."
+          text_rc=$?
+          set -e
+          if [ "$text_rc" -ne 0 ] && [ "$text_rc" -ne 3 ]; then
+            echo "::error::govulncheck (text) failed to run (exit $text_rc)"
+            exit 1
+          fi
+
+          # FAIL CLOSED. govuln-gate.sh treats an empty reachable.txt as a pass, so a
+          # filter that silently stops matching — a schema change, a renamed field —
+          # would disable the gate while looking identical to a clean scan. Two
+          # renderings of the same scan must agree: if text says there are
+          # symbol-level findings and our parse produced none, the parse is broken.
+          # "No reachable findings" is thereby DERIVED, never merely the absence of
+          # output.
+          reach=$(grep -c . reachable.txt || true)
+          if [ "$text_rc" -eq 3 ] && [ "$reach" -eq 0 ]; then
+            echo "::error::govulncheck reports symbol-level findings but the JSON filter produced none — the filter or govulncheck's schema is broken, so this gate cannot be trusted"
+            exit 1
+          fi
+          echo "cross-check ok: text_rc=$text_rc, $reach reachable finding(s) parsed"
+
+          bash "$GITHUB_WORKSPACE/.github/scripts/govuln-gate.sh" reachable.txt
 
       # Building without pushing catches what govulncheck cannot: a Dockerfile
       # that no longer compiles, a bad build-arg, a base image that moved. That
@@ -107,7 +183,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        binary: [zgrab2]
+        binary: [zgrab2, cdncheck]
     steps:
       - uses: actions/checkout@v4
 
