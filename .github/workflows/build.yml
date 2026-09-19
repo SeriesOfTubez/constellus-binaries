@@ -41,8 +41,9 @@ jobs:
       # pull a newer toolchain (Go's default is GOTOOLCHAIN=auto). Otherwise
       # GO_VERSION stops being binding and — worse — this gate and the Docker build
       # can resolve different toolchains, so the gate would verify a different
-      # standard library than the one that ships. projectdiscovery/utils#785 makes
-      # this live: it raises utils to `go 1.26.0`.
+      # standard library than the one that ships. This is not hypothetical: it is
+      # what forced GO_VERSION off the 1.25 line (planning#185) when x/vuln v1.8.0
+      # and projectdiscovery/utils#785 both moved to `go 1.26.0`.
       GOTOOLCHAIN: local
     strategy:
       fail-fast: false
@@ -84,23 +85,18 @@ jobs:
           # restructured `finding.trace` would silently stop matching (see the
           # fail-closed check further down). Bumping this is a reviewable edit.
           #
-          # v1.7.0 and not v1.8.0: x/vuln v1.8.0 declares `go 1.26.0`, so under
-          # GOTOOLCHAIN=local it cannot be installed by the Go 1.25.13 we pin. That
-          # is the guard working — with the old @latest + GOTOOLCHAIN=auto, Go was
-          # quietly fetching a 1.26 toolchain to build the scanner. v1.7.0 declares
-          # `go 1.25.0` and keeps tool and analysis on one toolchain.
-          #
-          # Moving to v1.8.0 means moving GO_VERSION to 1.26.x, which is a change to
-          # what we SHIP and deserves its own commit. projectdiscovery/utils#785 will
-          # force that decision soon anyway — it raises utils to `go 1.26.0`.
-          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          # The tool's own go line must stay <= GO_VERSION: under GOTOOLCHAIN=local
+          # a govulncheck that outruns it cannot be installed at all, and that is
+          # exactly how v1.8.0 (`go 1.26.0`) forced the 1.25 -> 1.26.8 move in
+          # planning#185. Keep the two in step when bumping either.
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
           # Exit 3 means "vulnerabilities found", which is not a verdict yet —
           # the allowlist decides. Any other non-zero is a real tool failure.
           # `-format json` exits 0 EVEN WITH FINDINGS. Exit 3 ("vulnerabilities
           # found") is raised only by the text handler's Flush; the JSON handler
           # implements no Flush at all, so scan.Flush() returns nil for it
-          # (x/vuln v1.7.0: internal/scan/run.go:81+160, jsonhandler.go,
+          # (x/vuln v1.8.0: internal/scan/run.go:81+160, jsonhandler.go,
           # internal/scan/text.go:84). So this exit code is a TOOL-FAILURE signal
           # and nothing more — never read it as a verdict about findings.
           set +e
