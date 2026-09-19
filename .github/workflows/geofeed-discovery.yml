@@ -77,3 +77,37 @@ jobs:
             -m "Discovered via RFC 9092 geofeed attributes in RIR whois."
           git push
           echo "Committed." >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Alert: a failing scheduled run has to reach a person ────────────────────
+  # A separate job rather than an `if: failure()` step, for consistency with the
+  # other two workflows: one alert per run, whatever failed. See
+  # .github/scripts/notify-failure.sh for why the issue is filed in this repo.
+  #
+  # This workflow is the quietest of the three - weekly, and its failure mode is
+  # "long-tail provider coverage silently stops improving", which nothing else
+  # would ever surface.
+  notify:
+    # EVERY job in this workflow must be listed. There is one today; a second
+    # one added later must be added here too, or it fails unreported.
+    needs: [discover]
+    # `failure()` alone would miss a run that hangs to the 6h limit - that reads
+    # as cancelled, not failed. Given this job crawls RIPEstat one prefix at a
+    # time behind a polite delay, hanging is a realistic outcome, not a
+    # theoretical one. The job default is success(), so this is spelled out.
+    if: (failure() || cancelled()) && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      # A job-level block REPLACES the workflow-level one, which is what drops
+      # this job's `contents: write`; `contents: read` is restated for checkout.
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report the failed scheduled run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_FILE: geofeed-discovery.yml
+          LABEL: ci-health:geofeed-discovery
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: bash .github/scripts/notify-failure.sh

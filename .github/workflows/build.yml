@@ -248,3 +248,36 @@ jobs:
           echo "### ${{ matrix.binary }} ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
           echo "Published \`ghcr.io/${OWNER_LC}/${{ matrix.binary }}:${VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "Digest: \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Alert: a failing scheduled run has to reach a person ────────────────────
+  # This is a separate job, not an `if: failure()` step inside `verify`. `verify`
+  # is a matrix, so such a step fires once per failing leg - on a week where a
+  # new stdlib advisory breaks every binary at once, that is N alerts for one
+  # logical failure, which is the "a weekly job must not produce a weekly issue"
+  # requirement violated inside a single run. One job, one alert.
+  notify:
+    # EVERY job in this workflow must be listed here. A job left out fails
+    # without being reported, which is exactly the bug this is fixing.
+    needs: [verify, publish]
+    # `failure()` alone would miss a run that hangs until the 6h limit: that
+    # reads as cancelled, not failed, and is precisely as silent. The default
+    # for a job is success(), so this condition has to be spelled out.
+    # Scheduled runs only - a failure on a push or a PR is already in front of
+    # someone; the unattended path is the one with nobody watching.
+    if: (failure() || cancelled()) && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      # A job-level block REPLACES the default set rather than adding to it, so
+      # `contents: read` has to be restated for the checkout below.
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report the failed scheduled run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_FILE: build.yml
+          LABEL: ci-health:build
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: bash .github/scripts/notify-failure.sh

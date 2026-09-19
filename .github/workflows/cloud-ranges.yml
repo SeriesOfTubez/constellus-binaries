@@ -197,3 +197,37 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # ── Alert: a failing scheduled run has to reach a person ────────────────────
+  # A separate job rather than an `if: failure()` step, for the same reason as
+  # in build.yml: one alert per run, whatever failed. See
+  # .github/scripts/notify-failure.sh for why the issue is filed in this repo.
+  notify:
+    # EVERY job in this workflow must be listed. A job left out fails without
+    # being reported - the bug this is fixing, reintroduced.
+    needs: [test, build]
+    # `failure()` alone would miss a run that hangs to the 6h limit - that reads
+    # as cancelled, not failed, and is just as silent. The job default is
+    # success(), so this has to be written out. Scheduled runs only: a failure
+    # on a push or PR is already in front of someone.
+    #
+    # `build` is skipped on pull requests by design, and a skipped job is not a
+    # failure, so this correctly ignores it.
+    if: (failure() || cancelled()) && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      # A job-level block REPLACES the workflow-level one rather than adding to
+      # it - which is what drops this job's contents/id-token/attestations write
+      # access, and why `contents: read` has to be restated for the checkout.
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report the failed scheduled run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_FILE: cloud-ranges.yml
+          LABEL: ci-health:cloud-ranges
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: bash .github/scripts/notify-failure.sh
