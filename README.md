@@ -34,12 +34,24 @@ documented, time-boxed justification.
 binaries/<name>/build.env   # REPO, VERSION (pinned tag), PKG, BIN, GO_VERSION
 binaries/<name>/Dockerfile  # golang build stage -> scratch image with just the binary
 datasets/<name>/            # a dataset built the same way: fetch -> validate -> publish
-.github/workflows/build.yml # discover binaries/* -> build + gate + scan + publish
+.github/workflows/build.yml # verify (gate + build) on every PR; publish on main
 ```
 
 ## Add a binary
-Create `binaries/<name>/` with a `build.env` (and the shared Dockerfile pattern).
-The workflow auto-discovers it — no per-binary YAML.
+Create `binaries/<name>/` with a `build.env` (and the shared Dockerfile pattern),
+then add `<name>` to the `matrix.binary` list in **both** jobs of
+`.github/workflows/build.yml` — `verify` and `publish`. There is no
+auto-discovery; the matrix is the registry of what gets built.
+
+## CI shape
+`verify` runs on every pull request, on main, and on the weekly schedule: it runs
+the govulncheck reachability gate against the pinned source and builds the image
+**without pushing**. `publish` runs only when the event is not a pull request, and
+carries the only credentials that can write to GHCR or sign an attestation.
+
+So a pull request proves a binary is fit to ship without being able to ship it —
+which is what lets a change to the gate itself be reviewed with CI evidence,
+rather than first executing after merge.
 
 ## Consume a published binary
 ```dockerfile
