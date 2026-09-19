@@ -3,7 +3,9 @@
 # binary in a scratch image. Consumers COPY --from this versioned image, e.g.:
 #   FROM ghcr.io/seriesoftubez/zgrab2:v1.0.0@sha256:... AS zgrab2-bin
 #   COPY --from=zgrab2-bin /zgrab2 /usr/local/bin/zgrab2
-ARG GO_VERSION=1.25
+# Fallback for a bare `docker build` only — CI always passes the exact patch
+# from build.env, which is the real pin. Keep this minor in step with it.
+ARG GO_VERSION=1.26
 FROM golang:${GO_VERSION}-bookworm AS build
 ARG REPO
 ARG VERSION
