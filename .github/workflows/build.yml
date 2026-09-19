@@ -36,6 +36,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      # A dependency whose go directive outruns GO_VERSION must FAIL, not silently
+      # pull a newer toolchain (Go's default is GOTOOLCHAIN=auto). Otherwise
+      # GO_VERSION stops being binding and — worse — this gate and the Docker build
+      # can resolve different toolchains, so the gate would verify a different
+      # standard library than the one that ships. projectdiscovery/utils#785 makes
+      # this live: it raises utils to `go 1.26.0`.
+      GOTOOLCHAIN: local
     strategy:
       fail-fast: false
       matrix:
@@ -71,7 +79,11 @@ jobs:
           # Apply the same security dep overrides the image build uses, so the
           # gate verifies the exact module tree we ship.
           if [ -n "$GO_PATCHES" ]; then go get $GO_PATCHES && go mod tidy; fi
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          # PINNED, not @latest: the gate below parses govulncheck's JSON, so its
+          # schema is load-bearing for a safety decision. An unpinned upgrade that
+          # restructured `finding.trace` would silently stop matching (see the
+          # fail-closed check further down). Bumping this is a reviewable edit.
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 
           # Exit 3 means "vulnerabilities found", which is not a verdict yet —
           # the allowlist decides. Any other non-zero is a real tool failure.
@@ -95,6 +107,21 @@ jobs:
 
           # Human-readable rendering in the log, for whoever has to act on it.
           "$(go env GOPATH)/bin/govulncheck" -format text "$PKG/..." || true
+
+          # FAIL CLOSED. govuln-gate.sh treats an empty reachable.txt as a pass, so a
+          # filter that silently stops matching — a schema change, a renamed field —
+          # would disable the gate entirely while looking identical to a clean scan.
+          # rc=3 means findings exist, so in that case the parse must produce SOMETHING
+          # or it is broken. "No reachable findings" has to be derived, never merely
+          # the absence of output.
+          if [ "$rc" -eq 3 ]; then
+            parsed=$(jq -r 'select(.finding != null) | .finding.osv' govuln.json | sort -u | wc -l)
+            if [ "$parsed" -eq 0 ]; then
+              echo "::error::govulncheck exited 3 (findings present) but the JSON parse produced 0 findings — the filter or govulncheck's schema is broken, so the gate cannot be trusted"
+              exit 1
+            fi
+            echo "parsed $parsed finding(s); $(wc -l < reachable.txt) symbol-level reachable"
+          fi
 
           bash "$GITHUB_WORKSPACE/.github/scripts/govuln-gate.sh" reachable.txt
 

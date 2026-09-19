@@ -12,7 +12,10 @@ ARG PKG
 ARG BIN
 ARG GO_PATCHES
 # Static build so the binary runs on a minimal base and ships in scratch.
-ENV CGO_ENABLED=0 GOFLAGS=-trimpath
+# GOTOOLCHAIN=local so a dependency requiring a newer Go FAILS here rather than
+# silently downloading one — that would make the GO_VERSION pin decorative and
+# break lockstep with the CI govulncheck gate below.
+ENV CGO_ENABLED=0 GOFLAGS=-trimpath GOTOOLCHAIN=local
 WORKDIR /src
 # Pinned-ref shallow fetch (REF may be a tag, branch, or commit SHA — `git clone
 # --branch` only accepts tags/branches, so init+fetch+checkout instead). Module
