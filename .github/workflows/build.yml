@@ -83,7 +83,17 @@ jobs:
           # schema is load-bearing for a safety decision. An unpinned upgrade that
           # restructured `finding.trace` would silently stop matching (see the
           # fail-closed check further down). Bumping this is a reviewable edit.
-          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          #
+          # v1.7.0 and not v1.8.0: x/vuln v1.8.0 declares `go 1.26.0`, so under
+          # GOTOOLCHAIN=local it cannot be installed by the Go 1.25.13 we pin. That
+          # is the guard working — with the old @latest + GOTOOLCHAIN=auto, Go was
+          # quietly fetching a 1.26 toolchain to build the scanner. v1.7.0 declares
+          # `go 1.25.0` and keeps tool and analysis on one toolchain.
+          #
+          # Moving to v1.8.0 means moving GO_VERSION to 1.26.x, which is a change to
+          # what we SHIP and deserves its own commit. projectdiscovery/utils#785 will
+          # force that decision soon anyway — it raises utils to `go 1.26.0`.
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 
           # Exit 3 means "vulnerabilities found", which is not a verdict yet —
           # the allowlist decides. Any other non-zero is a real tool failure.
