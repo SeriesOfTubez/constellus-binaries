@@ -97,12 +97,18 @@ jobs:
 
           # Exit 3 means "vulnerabilities found", which is not a verdict yet —
           # the allowlist decides. Any other non-zero is a real tool failure.
+          # `-format json` exits 0 EVEN WITH FINDINGS. Exit 3 ("vulnerabilities
+          # found") is raised only by the text handler's Flush; the JSON handler
+          # implements no Flush at all, so scan.Flush() returns nil for it
+          # (x/vuln v1.7.0: internal/scan/run.go:81+160, jsonhandler.go,
+          # internal/scan/text.go:84). So this exit code is a TOOL-FAILURE signal
+          # and nothing more — never read it as a verdict about findings.
           set +e
           "$(go env GOPATH)/bin/govulncheck" -format json "$PKG/..." > govuln.json
-          rc=$?
+          json_rc=$?
           set -e
-          if [ "$rc" -ne 0 ] && [ "$rc" -ne 3 ]; then
-            echo "::error::govulncheck failed to run (exit $rc)"
+          if [ "$json_rc" -ne 0 ]; then
+            echo "::error::govulncheck (json) failed to run (exit $json_rc)"
             exit 1
           fi
 
@@ -115,23 +121,32 @@ jobs:
                  | select(.finding.trace[0].function != null)
                  | .finding.osv' govuln.json | sort -u > reachable.txt
 
-          # Human-readable rendering in the log, for whoever has to act on it.
-          "$(go env GOPATH)/bin/govulncheck" -format text "$PKG/..." || true
+          # Human-readable rendering in the log for whoever has to act on it — and
+          # the ORACLE for the cross-check below. Unlike json, text mode does exit 3,
+          # and exactly when findings match the scan level (symbol, by default),
+          # which is the same question the jq filter above asks.
+          set +e
+          "$(go env GOPATH)/bin/govulncheck" -format text "$PKG/..."
+          text_rc=$?
+          set -e
+          if [ "$text_rc" -ne 0 ] && [ "$text_rc" -ne 3 ]; then
+            echo "::error::govulncheck (text) failed to run (exit $text_rc)"
+            exit 1
+          fi
 
           # FAIL CLOSED. govuln-gate.sh treats an empty reachable.txt as a pass, so a
           # filter that silently stops matching — a schema change, a renamed field —
-          # would disable the gate entirely while looking identical to a clean scan.
-          # rc=3 means findings exist, so in that case the parse must produce SOMETHING
-          # or it is broken. "No reachable findings" has to be derived, never merely
-          # the absence of output.
-          if [ "$rc" -eq 3 ]; then
-            parsed=$(jq -r 'select(.finding != null) | .finding.osv' govuln.json | sort -u | wc -l)
-            if [ "$parsed" -eq 0 ]; then
-              echo "::error::govulncheck exited 3 (findings present) but the JSON parse produced 0 findings — the filter or govulncheck's schema is broken, so the gate cannot be trusted"
-              exit 1
-            fi
-            echo "parsed $parsed finding(s); $(wc -l < reachable.txt) symbol-level reachable"
+          # would disable the gate while looking identical to a clean scan. Two
+          # renderings of the same scan must agree: if text says there are
+          # symbol-level findings and our parse produced none, the parse is broken.
+          # "No reachable findings" is thereby DERIVED, never merely the absence of
+          # output.
+          reach=$(grep -c . reachable.txt || true)
+          if [ "$text_rc" -eq 3 ] && [ "$reach" -eq 0 ]; then
+            echo "::error::govulncheck reports symbol-level findings but the JSON filter produced none — the filter or govulncheck's schema is broken, so this gate cannot be trusted"
+            exit 1
           fi
+          echo "cross-check ok: text_rc=$text_rc, $reach reachable finding(s) parsed"
 
           bash "$GITHUB_WORKSPACE/.github/scripts/govuln-gate.sh" reachable.txt
 
